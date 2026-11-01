@@ -18,6 +18,8 @@ The generator-event model and optimization approach are based on [fkusz/ITRTG-Ge
 
 Screenshot recognition runs locally with **Tesseract** by default.
 
+![Optimizer interface with score history and recommended upgrades](docs/images/optimizer.png)
+
 ## Installation and startup
 
 1. On [GitHub](https://github.com/Rai-Fox/ITRTG-Event-Web-Optimizer), select **Code → Download ZIP**.

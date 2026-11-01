@@ -18,6 +18,8 @@ Node.js, uv, Python и Tesseract подготовит `start.cmd`. **[Как у�
 
 Расчёты и распознавание через Tesseract выполняются локально. Интерфейс доступен на русском и английском.
 
+![Интерфейс оптимизатора с графиком очков и рекомендованными улучшениями](docs/images/optimizer.png)
+
 ## Установка и запуск
 
 1. На [странице проекта](https://github.com/Rai-Fox/ITRTG-Event-Web-Optimizer) нажмите **Code → Download ZIP**.
