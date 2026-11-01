@@ -14,16 +14,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from itrtg_web.engines import build_registry
+from itrtg_web.continuation import ContinuedSearch, continuation_path
 from itrtg_web.frontend import mount_frontend
 from itrtg_web.models import EngineMetadata, OcrParseResult, OptimizerResult, Profile, ProfileIn, ProfilePage, RunCreate, RunPage, RunRecord, SimulateRequest, TimelineSnapshot
 from itrtg_web.ocr import OcrEngineId, available_ocr_engines, parse_image
 from itrtg_web.storage import create_profile, create_run, delete_profile, delete_run, get_profile, get_run, init_db, list_profiles, list_runs, update_profile, update_run
-from itrtg_web.storage import active_runs, recover_interrupted_runs
+from itrtg_web.storage import active_runs, get_instance_id, recover_interrupted_runs
 
 app = FastAPI(title="ITRTG Web Optimizer")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -93,6 +94,11 @@ def with_live_result(run: RunRecord) -> RunRecord:
 @app.get("/api/engines", response_model=list[EngineMetadata])
 def engines() -> list[EngineMetadata]:
     return [engine.metadata() for engine in registry.list()]
+
+
+@app.get("/api/instance")
+def instance() -> dict[str, str]:
+    return {"id": get_instance_id()}
 
 
 @app.get("/api/engines/{engine_id}/schema")
@@ -199,15 +205,45 @@ def _start_run(payload: RunCreate) -> RunRecord:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    run = create_run(payload.profile_id, payload.engine_id, engine.metadata().version, payload.input, payload.limits)
+    input_data = payload.input
+    continuation = None
+    initial = None
+    if payload.parent_run_id is not None:
+        try:
+            parent = get_run(payload.parent_run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="The saved run to continue was not found.") from exc
+        if parent.status not in {"completed", "stopped", "interrupted"} or parent.result is None:
+            raise HTTPException(status_code=409, detail="Only a finished saved run with a result can be continued.")
+        if (parent.engine_id != payload.engine_id or parent.engine_version != engine.metadata().version
+                or parent.result.engine_id != parent.engine_id
+                or parent.result.engine_version != parent.engine_version):
+            raise HTTPException(status_code=409, detail="The saved run uses an incompatible optimization engine.")
+        try:
+            path = continuation_path(parent, input_data)
+            if input_data.starting_path and input_data.starting_path != path:
+                raise ValueError("The starting path does not match the saved plan.")
+            input_data = input_data.model_copy(update={"starting_path": path})
+            initial = engine.simulate(input_data, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        continuation = ContinuedSearch(parent, initial, input_data)
+        initial = continuation.merge(initial)
+
+    run = create_run(payload.profile_id, payload.engine_id, engine.metadata().version, input_data, payload.limits, payload.parent_run_id)
+    if initial is not None:
+        run = update_run(run.id, "queued", result=initial, score=initial.score)
+        run_latest_results[run.id] = initial
     stop_event = Event()
     run_stop_events[run.id] = stop_event
-    run_progress[run.id] = {"status": "queued", "score": None}
+    run_progress[run.id] = progress_payload(initial, "queued") if initial is not None else {"status": "queued", "score": None}
 
     last_checkpoint = 0.0
 
     def progress(result: OptimizerResult) -> None:
         nonlocal last_checkpoint
+        if continuation is not None:
+            result = continuation.merge(result)
         run_latest_results[run.id] = result.model_copy()
         run_progress[run.id] = progress_payload(result)
         now = time.monotonic()
@@ -218,8 +254,10 @@ def _start_run(payload: RunCreate) -> RunRecord:
     def worker() -> None:
         try:
             update_run(run.id, "running")
-            run_progress[run.id] = {"status": "running", "score": None}
-            result = engine.optimize(payload.input, payload.limits, stop_event=stop_event, progress=progress)
+            run_progress[run.id] = progress_payload(initial) if initial is not None else {"status": "running", "score": None}
+            result = engine.optimize(input_data, payload.limits, stop_event=stop_event, progress=progress)
+            if continuation is not None:
+                result = continuation.merge(result)
             status = "stopped" if result.stopped or stop_event.is_set() else "completed"
             update_run(run.id, status, result=result, score=result.score)
             run_progress[run.id] = progress_payload(result, status)

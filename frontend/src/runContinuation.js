@@ -51,8 +51,12 @@ export function canContinueOptimization(options) {
   return getContinuationSeed(options) !== null;
 }
 
-export function buildRunInput(options) {
+export function buildRunRequest(options, limits) {
   const seed = getContinuationSeed(options);
-  if (!seed) return options.input;
-  return { ...options.input, starting_path: seed.path };
+  return {
+    engine_id: options.engineId,
+    input: seed ? { ...options.input, starting_path: seed.path } : options.input,
+    limits,
+    ...(seed ? { parent_run_id: options.run.id } : {}),
+  };
 }

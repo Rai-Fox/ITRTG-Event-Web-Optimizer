@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import {
-  buildRunInput,
+  buildRunRequest,
   getContinuationSeed,
   settingsMatch,
 } from "../src/runContinuation.js";
@@ -22,16 +22,20 @@ function continuation(input = gameInput()) {
 }
 
 describe("Continuing a saved plan", () => {
-  test("reuses the best path after a finished or interrupted search", () => {
+  test("links a continuation to its saved run and reuses the best path", () => {
     for (const status of ["completed", "stopped", "interrupted"]) {
       const request = continuation();
       request.runStatus = status;
       request.run.status = status;
 
-      const prepared = buildRunInput(request);
+      const limits = { time_limit_seconds: 60, max_iterations: null };
+      const prepared = buildRunRequest(request, limits);
 
-      assert.deepEqual(prepared.starting_path, request.bestPath, status);
-      assert.notEqual(prepared.starting_path, request.bestPath, status);
+      assert.equal(prepared.parent_run_id, request.run.id, status);
+      assert.equal(prepared.engine_id, request.engineId, status);
+      assert.deepEqual(prepared.limits, limits, status);
+      assert.deepEqual(prepared.input.starting_path, request.bestPath, status);
+      assert.notEqual(prepared.input.starting_path, request.bestPath, status);
     }
   });
 
@@ -42,11 +46,12 @@ describe("Continuing a saved plan", () => {
     });
     const request = continuation(current);
 
-    const prepared = buildRunInput(request);
+    const prepared = buildRunRequest(request);
 
-    assert.deepEqual(prepared.starting_path, request.bestPath);
-    assert.equal(prepared.duration_seconds, 3000);
-    assert.deepEqual(prepared.resource_counts, Array(12).fill(125));
+    assert.equal(prepared.parent_run_id, request.run.id);
+    assert.deepEqual(prepared.input.starting_path, request.bestPath);
+    assert.equal(prepared.input.duration_seconds, 3000);
+    assert.deepEqual(prepared.input.resource_counts, Array(12).fill(125));
     assert.equal(settingsMatch(request.input, request.run.input), false);
   });
 
@@ -58,12 +63,15 @@ describe("Continuing a saved plan", () => {
     const before = structuredClone(request);
 
     const seed = getContinuationSeed(request);
+    const prepared = buildRunRequest(request);
 
     assert.deepEqual(seed, {
       mode: "trimmed",
       path: [upgrade.cup, upgrade.finish],
       removedPurchases: 3,
     });
+    assert.equal(prepared.parent_run_id, request.run.id);
+    assert.deepEqual(prepared.input.starting_path, [upgrade.cup, upgrade.finish]);
     seed.path.push(upgrade.spiderWeb);
     assert.deepEqual(request, before);
   });
@@ -90,7 +98,7 @@ describe("Continuing a saved plan", () => {
     const request = continuation(current);
     request.bestPath = [upgrade.graveStone];
 
-    assert.deepEqual(buildRunInput(request).starting_path, [upgrade.finish]);
+    assert.deepEqual(buildRunRequest(request).input.starting_path, [upgrade.finish]);
   });
 
   test("does not carry a plan into a reset game or an extended event", () => {
@@ -100,6 +108,8 @@ describe("Continuing a saved plan", () => {
 
     assert.equal(getContinuationSeed(reset), null, "levels decreased");
     assert.equal(getContinuationSeed(extended), null, "event time increased");
+    assert.equal(buildRunRequest(reset).parent_run_id, undefined, "a new search has no parent history");
+    assert.deepEqual(buildRunRequest(reset).input.starting_path, []);
   });
 
   test("does not reuse a plan from an incompatible engine", () => {
@@ -128,7 +138,10 @@ describe("Continuing a saved plan", () => {
       starting_path: [upgrade.cup, upgrade.finish],
     });
 
-    assert.deepEqual(buildRunInput(continuation(manual)), manual);
+    const prepared = buildRunRequest(continuation(manual));
+
+    assert.deepEqual(prepared.input, manual);
+    assert.equal(prepared.parent_run_id, undefined);
   });
 });
 

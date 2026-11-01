@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildRunInput, getContinuationSeed, settingsMatch } from "./runContinuation.js";
-import { ACTIVE_STATUSES, DEFAULT_LIMITS, readWorkspace, writeWorkspace, inputAtTimeline } from "./workspace.js";
+import { buildRunRequest, getContinuationSeed, settingsMatch } from "./runContinuation.js";
+import { ACTIVE_STATUSES, DEFAULT_LIMITS, readWorkspace, writeWorkspace, reconcileWorkspace, inputAtTimeline } from "./workspace.js";
 import { useI18n } from "./I18nProvider.jsx";
 import { translate, localeFor } from "./i18n.js";
 import { durationParts, durationFromParts, formatScore, optimizerStatus } from "./runPresentation.js";
@@ -96,12 +96,12 @@ function ActiveSearch({ run, connection, onShow, onStop }) {
     <div className="search-heading"><h3>{heading}</h3><div className="actions"><button className="button ghost" onClick={onShow}>{t("Show")}</button><button className="button danger" onClick={onStop}>{t("Stop search")}</button></div></div>
     <div className="search-metrics">
       <div className="search-score"><span>{t("Optimization points")}</span><strong>{formatScore(progress.score, localeFor(language))}</strong></div>
-      <div><span>{t("Time used")}</span><strong>{progress.elapsedSeconds == null ? "—" : t("{0} of {1}", [formatTime(Math.floor(progress.elapsedSeconds), language), formatTime(progress.limitSeconds, language)])}</strong></div>
+      <div><span>{t("Time used")}</span><strong>{progress.elapsedSeconds == null ? "—" : t("{0} of {1}", [formatTime(Math.floor(progress.elapsedSeconds), language), formatTime(progress.limitSeconds, language)])}</strong>{progress.totalElapsedSeconds > progress.elapsedSeconds && <span>{t("Total: {0}", [formatTime(Math.floor(progress.totalElapsedSeconds), language)])}</span>}</div>
       <div><span>{t("Variants checked")}</span><strong>{progress.iterations == null ? "—" : formatNumber(progress.iterations, 0, language)}</strong></div>
       <div><span>{t("Since last improvement")}</span><strong>{progress.secondsSinceImprovement == null ? "—" : formatTime(Math.floor(progress.secondsSinceImprovement), language)}</strong></div>
     </div>
     <progress aria-label={t("Search time used")} max="1" value={progress.fraction ?? undefined} />
-    <ScoreHistoryChart history={run.result?.search_stats?.score_history} elapsedSeconds={progress.elapsedSeconds} />
+    <ScoreHistoryChart history={run.result?.search_stats?.score_history} elapsedSeconds={progress.totalElapsedSeconds} />
   </section>;
 }
 function CompletedSearch({ run, summary }) {
@@ -110,7 +110,7 @@ function CompletedSearch({ run, summary }) {
     <div className="search-heading"><h3>{t("Run #{0}", [run.id])} · {t(statusLabels[run.status])}</h3></div>
     <div className="search-metrics">
       <div className="search-score"><span>{t("Optimization points")}</span><strong>{formatScore(summary.score, localeFor(language))}</strong></div>
-      {summary.elapsedSeconds != null && <div><span>{t("Time used")}</span><strong>{formatTime(Math.floor(summary.elapsedSeconds), language)}</strong></div>}
+      {summary.currentElapsedSeconds != null && <div><span>{t("Time used")}</span><strong>{summary.limitSeconds == null ? formatTime(Math.floor(summary.currentElapsedSeconds), language) : t("{0} of {1}", [formatTime(Math.floor(summary.currentElapsedSeconds), language), formatTime(summary.limitSeconds, language)])}</strong>{summary.elapsedSeconds > summary.currentElapsedSeconds && <span>{t("Total: {0}", [formatTime(Math.floor(summary.elapsedSeconds), language)])}</span>}</div>}
       {summary.iterations != null && <div><span>{t("Variants checked")}</span><strong>{formatNumber(summary.iterations, 0, language)}</strong></div>}
       {summary.secondsSinceImprovement != null && <div><span>{t("Since last improvement")}</span><strong>{formatTime(Math.floor(summary.secondsSinceImprovement), language)}</strong></div>}
     </div>
@@ -379,6 +379,8 @@ export default function App() {
   const [input, setInput] = useState(restored.input);
   const [limits, setLimits] = useState(restored.limits);
   const [engineId, setEngineId] = useState(restored.engineId || "cpp-local-search");
+  const [instanceId, setInstanceId] = useState(restored.instanceId || null);
+  const [instanceReady, setInstanceReady] = useState(false);
   const [profileId, setProfileId] = useState(restored.profileId || null);
   const [profileName, setProfileName] = useState(restored.profileName || t("My profile"));
   const [sourceInfo, setSourceInfo] = useState(restored.sourceInfo || { kind: "manual" });
@@ -405,6 +407,50 @@ export default function App() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [undo, setUndo] = useState(null);
   const startGuard = useRef(false);
+  const instanceRef = useRef(null);
+  const instanceCheckRef = useRef(null);
+  const workspaceRef = useRef(null);
+  workspaceRef.current = { instanceId, profileId, selectedRunId, preview, timelineSeconds, sourceInfo, undo };
+  const confirmInstance = useCallback(() => {
+    if (instanceCheckRef.current) return instanceCheckRef.current;
+    instanceCheckRef.current = (async () => {
+      try {
+        const identity = await request("/api/instance");
+        if (typeof identity?.id !== "string" || !identity.id) throw new Error("Invalid instance identity");
+        const previous = workspaceRef.current;
+        const reconciled = reconcileWorkspace(previous, identity.id);
+        instanceRef.current = identity.id;
+        if (reconciled !== previous) {
+          workspaceRef.current = reconciled;
+          setInstanceId(identity.id);
+          setProfileId(null);
+          setSelectedRunId(null);
+          setPreview(false);
+          setTimelineSeconds(0);
+          setSourceInfo(reconciled.sourceInfo);
+          setUndo(null);
+          setRun(null);
+          setActiveRun(null);
+          setTimeline(null);
+          setProfiles([]);
+          setProfileTotal(0);
+          setProfilePage(1);
+          setRuns([]);
+          setRunTotal(0);
+          setRunPage(1);
+          setNotice("");
+        }
+        setInstanceReady(true);
+        return reconciled === previous;
+      } catch {
+        instanceRef.current = null;
+        setInstanceReady(false);
+        setConnection("disconnected");
+        return false;
+      }
+    })().finally(() => { instanceCheckRef.current = null; });
+    return instanceCheckRef.current;
+  }, []);
   const closeOcr = useCallback(() => setOcrOpen(false), []);
   const selectedEngine = engines.find(engine => engine.id === engineId);
   const runActive = ACTIVE_STATUSES.has(activeRun?.status) || isStarting;
@@ -455,6 +501,7 @@ export default function App() {
         input,
         limits,
         engineId,
+        instanceId,
         profileId,
         profileName,
         sourceInfo,
@@ -467,16 +514,18 @@ export default function App() {
     } catch {
       setSaved(false);
     }
-  }, [input, limits, engineId, profileId, profileName, sourceInfo, selectedRunId, timelineSeconds, preview, view]);
+  }, [input, limits, engineId, instanceId, profileId, profileName, sourceInfo, selectedRunId, timelineSeconds, preview, view]);
   useEffect(() => {
     request("/api/engines").then(setEngines).catch(err => setError(err.message));
   }, []);
   useEffect(() => {
+    if (!instanceReady) return;
     loadProfiles(profilePage).catch(err => setError(err.message));
-  }, [profilePage]);
+  }, [profilePage, instanceId, instanceReady]);
   useEffect(() => {
+    if (!instanceReady) return;
     loadRuns(runPage).catch(err => setError(err.message));
-  }, [runPage]);
+  }, [runPage, instanceId, instanceReady]);
 
   // The running search belongs to the server, independently of the edited form.
   useEffect(() => {
@@ -484,15 +533,21 @@ export default function App() {
     let timer;
     let record = null;
     async function poll() {
+      let requestInstanceId = null;
       try {
+        if (!await confirmInstance() || cancelled) {
+          record = null;
+          return;
+        }
+        requestInstanceId = instanceRef.current;
         const active = await request("/api/runs/active");
-        if (cancelled) return;
+        if (cancelled || instanceRef.current !== requestInstanceId) return;
         setActiveRun(active[0] || null);
         if (selectedRunId) {
           if (!record || ACTIVE_STATUSES.has(record.status)) {
             const previousStatus = record?.status;
             record = active.find(item => item.id === selectedRunId) || (await request(`/api/runs/${selectedRunId}`));
-            if (cancelled) return;
+            if (cancelled || instanceRef.current !== requestInstanceId) return;
             setRun(record);
             if (previousStatus !== record.status) {
               loadRuns().catch(() => {});
@@ -506,7 +561,7 @@ export default function App() {
         }
         setConnection("connected");
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && instanceRef.current === requestInstanceId) {
           if (err.status === 404 && selectedRunId) {
             setSelectedRunId(null);
             setRun(null);
@@ -523,30 +578,37 @@ export default function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [selectedRunId, t]);
+  }, [selectedRunId, instanceId, confirmInstance, t]);
   useEffect(() => {
     let cancelled = false;
     setTimeline(null);
-    if (!preview || !run?.result) return;
+    if (!instanceReady || !preview || !run?.result) return;
+    const requestInstanceId = instanceRef.current;
     request(`/api/runs/${run.id}/timeline?t=${timelineSeconds}`).then(value => {
-      if (!cancelled) setTimeline(value);
+      if (!cancelled && instanceRef.current === requestInstanceId) setTimeline(value);
     }).catch(err => {
-      if (!cancelled) setError(err.message);
+      if (!cancelled && instanceRef.current === requestInstanceId) setError(err.message);
     });
     return () => {
       cancelled = true;
     };
-  }, [run, preview, timelineSeconds]);
+  }, [run, preview, timelineSeconds, instanceId, instanceReady]);
   useEffect(() => {
     setTimelineSeconds(value => Math.min(value, forecastDuration));
   }, [forecastDuration]);
   async function loadProfiles(page = profilePage) {
+    const requestInstanceId = instanceRef.current;
+    if (!requestInstanceId) return;
     const data = await request(`/api/profiles?page=${page}&page_size=${PAGE_SIZE}`);
+    if (instanceRef.current !== requestInstanceId) return;
     setProfiles(data.items);
     setProfileTotal(data.total);
   }
   async function loadRuns(page = runPage) {
+    const requestInstanceId = instanceRef.current;
+    if (!requestInstanceId) return;
     const data = await request(`/api/runs?page=${page}&page_size=${PAGE_SIZE}`);
+    if (instanceRef.current !== requestInstanceId) return;
     setRuns(data.items);
     setRunTotal(data.total);
   }
@@ -599,7 +661,8 @@ export default function App() {
     setOcrOpen(false);
     setNotice(t("Game state updated. The previous result is still available."));
   }
-  function openRun(savedRun) {
+  async function openRun(savedRun) {
+    if (!instanceReady || !await confirmInstance()) return;
     setRun(savedRun);
     setSelectedRunId(savedRun.id);
     setTimeline(null);
@@ -607,8 +670,9 @@ export default function App() {
     setPreview(true);
     setView("dashboard");
   }
-  function loadRunSettings(savedRun) {
-    setInput(structuredClone(savedRun.input));
+  async function loadRunSettings(savedRun) {
+    if (!instanceReady || !await confirmInstance()) return;
+    setInput({ ...structuredClone(savedRun.input), starting_path: [] });
     setLimits(normalizeSearchLimits({
       ...DEFAULT_LIMITS,
       ...savedRun.limits
@@ -620,7 +684,7 @@ export default function App() {
     setNotice(t("Settings from run #{0} loaded. Check this saved snapshot against the game.", [savedRun.id]));
   }
   async function startRun() {
-    if (startGuard.current || runActive) return;
+    if (!instanceReady || startGuard.current || runActive) return;
     if (input.duration_seconds <= 0) { setError(t("Event time must be greater than zero.")); return; }
     if (!growthReady) {
       setError(t("Enter your unlocked pet count to calculate Growth."));
@@ -631,14 +695,17 @@ export default function App() {
     setError("");
     setNotice("");
     try {
+      if (!await confirmInstance()) return;
+      const requestInstanceId = instanceRef.current;
       const created = await request("/api/runs", {
         method: "POST",
-        body: JSON.stringify({
-          engine_id: engineId,
-          input: buildRunInput(continuationOptions),
-          limits: normalizeSearchLimits(limits)
-        })
+        body: JSON.stringify(buildRunRequest(continuationOptions, normalizeSearchLimits(limits)))
       });
+      if (instanceRef.current !== requestInstanceId) return;
+      if (continuationSeed) {
+        setInput(current => current.starting_path === input.starting_path
+          ? { ...current, starting_path: [] } : current);
+      }
       setRun(created);
       setSelectedRunId(created.id);
       setActiveRun(ACTIVE_STATUSES.has(created.status) ? created : null);
@@ -655,18 +722,21 @@ export default function App() {
     }
   }
   async function stopRun() {
-    if (!activeRun) return;
+    if (!instanceReady || !activeRun) return;
     try {
+      if (!await confirmInstance()) return;
+      const requestInstanceId = instanceRef.current;
       await request(`/api/runs/${activeRun.id}/stop`, {
         method: "POST"
       });
+      if (instanceRef.current !== requestInstanceId) return;
       setNotice(t("Stopping the search and saving the best path…"));
     } catch (err) {
       setError(err.message);
     }
   }
-  function useTimelineAsStart() {
-    if (!timeline || !run) return;
+  async function useTimelineAsStart() {
+    if (!instanceReady || !timeline || !run || !await confirmInstance()) return;
     setUndo({
       input: structuredClone(input),
       engineId,
@@ -678,8 +748,8 @@ export default function App() {
     setPreview(false);
     setNotice(t("Forecast adopted as the current state. Time and busy periods were shifted."));
   }
-  function undoTimelineStart() {
-    if (!undo) return;
+  async function undoTimelineStart() {
+    if (!instanceReady || !undo || !await confirmInstance()) return;
     setInput(undo.input);
     setEngineId(undo.engineId);
     setSourceInfo(undo.sourceInfo);
@@ -696,10 +766,12 @@ export default function App() {
     });
   }
   async function saveProfile(copy = false) {
-    if (isSavingProfile) return;
+    if (!instanceReady || isSavingProfile) return;
     setIsSavingProfile(true);
     setError("");
     try {
+      if (!await confirmInstance()) return;
+      const requestInstanceId = instanceRef.current;
       const updating = profileId && !copy;
       const profile = await request(updating ? `/api/profiles/${profileId}` : "/api/profiles", {
         method: updating ? "PUT" : "POST",
@@ -710,9 +782,11 @@ export default function App() {
           limits: normalizeSearchLimits(limits)
         })
       });
+      if (instanceRef.current !== requestInstanceId) return;
       setProfileId(profile.id);
       setProfilePage(1);
       await loadProfiles(1);
+      if (instanceRef.current !== requestInstanceId) return;
       setNotice(t("Profile \"{0}\" saved, including search limits.", [profileName]));
     } catch (err) {
       setError(err.message);
@@ -720,7 +794,8 @@ export default function App() {
       setIsSavingProfile(false);
     }
   }
-  function loadProfile(profile) {
+  async function loadProfile(profile) {
+    if (!instanceReady || !await confirmInstance()) return;
     setInput({ ...structuredClone(profile.input), duration_seconds: input.duration_seconds });
     setLimits(normalizeSearchLimits({
       ...DEFAULT_LIMITS,
@@ -735,10 +810,14 @@ export default function App() {
     setNotice(t("Profile \"{0}\" loaded. The previous result is still available.", [profile.name]));
   }
   async function deleteProfile(id) {
+    if (!instanceReady) return;
     try {
+      if (!await confirmInstance()) return;
+      const requestInstanceId = instanceRef.current;
       await request(`/api/profiles/${id}`, {
         method: "DELETE"
       });
+      if (instanceRef.current !== requestInstanceId) return;
       if (profileId === id) setProfileId(null);
       const page = profiles.length === 1 ? Math.max(1, profilePage - 1) : profilePage;
       setProfilePage(page);
@@ -748,10 +827,14 @@ export default function App() {
     }
   }
   async function deleteRun(savedRun) {
+    if (!instanceReady) return;
     try {
+      if (!await confirmInstance()) return;
+      const requestInstanceId = instanceRef.current;
       await request(`/api/runs/${savedRun.id}`, {
         method: "DELETE"
       });
+      if (instanceRef.current !== requestInstanceId) return;
       if (selectedRunId === savedRun.id) {
         setSelectedRunId(null);
         setRun(null);
@@ -801,7 +884,7 @@ export default function App() {
         {view === "dashboard" && <>
           <section className="page-header"><h2>{t("Planner")}</h2><button className="button secondary" onClick={() => setOcrOpen(true)}>{t("Import screenshot")}</button></section>
           {completedSummary && <CompletedSearch run={run} summary={completedSummary} />}
-          <section className="section-card planner-controls"><DurationInputs value={input.duration_seconds} label={t("Time until event ends")} onChange={(value) => setInput({ ...input, duration_seconds: value })} /><label className="search-budget">{t("Search time, seconds")}<input type="number" min="0.1" max="3600" value={limits.time_limit_seconds} onChange={(event) => setLimits({ ...limits, time_limit_seconds: Number(event.target.value) })} /></label><button className="button" disabled={runActive || !growthReady || input.duration_seconds <= 0 || connection !== "connected"} onClick={startRun}>{isStarting ? t("Starting…") : continuationSeed?.mode === "trimmed" ? t("Improve remaining plan") : continuationAvailable ? t("Continue search") : t("Calculate plan")}</button>{input.duration_seconds <= 0 && <small className="field-error">{t("Event time must be greater than zero.")}</small>}</section>
+          <section className="section-card planner-controls"><DurationInputs value={input.duration_seconds} label={t("Time until event ends")} onChange={(value) => setInput({ ...input, duration_seconds: value })} /><label className="search-budget">{t("Search time, seconds")}<input type="number" min="0.1" max="3600" value={limits.time_limit_seconds} onChange={(event) => setLimits({ ...limits, time_limit_seconds: Number(event.target.value) })} /></label><button className="button" disabled={!instanceReady || runActive || !growthReady || input.duration_seconds <= 0 || connection !== "connected"} onClick={startRun}>{isStarting ? t("Starting…") : continuationSeed?.mode === "trimmed" ? t("Improve remaining plan") : continuationAvailable ? t("Continue search") : t("Calculate plan")}</button>{input.duration_seconds <= 0 && <small className="field-error">{t("Event time must be greater than zero.")}</small>}</section>
           {!growthReady && <div className="readiness-warning"><span>{t("Enter your unlocked pet count for Growth.")}</span><button className="button ghost" onClick={() => setView("settings")}>{t("Settings")}</button></div>}
           {stale && <div className="readiness-warning">{continuationSeed?.mode === "trimmed" ? <span>{t("Starting from run #{0}: {1} completed purchases skipped.", [run.id, continuationSeed.removedPurchases])}</span> : <><span>{t("Inputs changed. Run #")}{run.id} {t("is still available for the previous settings.")}</span><button className="button ghost" onClick={() => loadRunSettings(run)}>{t("Load its settings")}</button></>}</div>}
           {run?.error && <div className="banner danger">{t(run.error)}</div>}
@@ -834,7 +917,7 @@ export default function App() {
           <div className="history-actions"><button className="button secondary" onClick={() => openRun(item)}>{t("Open plan")}</button><details className="history-menu"><summary>{t("More")}</summary><div className="history-menu-items"><button className="button ghost" onClick={() => { openRun(item); loadRunSettings(item); }}>{t("Load to continue")}</button><button className="button danger subtle" disabled={ACTIVE_STATUSES.has(item.status)} onClick={() => deleteRun(item)}>{t("Delete")}</button></div></details></div>
         </article>)}</div>}<Pagination page={runPage} total={runTotal} pageSize={PAGE_SIZE} onPageChange={setRunPage} /></section>}
 
-        {view === "settings" && <section className="settings-page"><div className="page-header"><h2>{t("Settings")}</h2><button className="button" disabled={isSavingProfile} onClick={() => saveProfile(false)}>{profileId ? t("Save profile changes") : t("Save profile")}</button></div><div className="settings-layout">
+        {view === "settings" && <section className="settings-page"><div className="page-header"><h2>{t("Settings")}</h2><button className="button" disabled={!instanceReady || isSavingProfile} onClick={() => saveProfile(false)}>{profileId ? t("Save profile changes") : t("Save profile")}</button></div><div className="settings-layout">
           <section className="section-card settings-section"><h3>{t("Game")}</h3><div className="form-grid three">{[["unlocked_pets", t("Unlocked pets")], ["dungeon_levels", t("Dungeon levels")], ["adventure_level", t("Adventure level")]].map(([key, label]) => <label key={key}>{label}<input type="number" min="0" value={input[key]} onChange={event => setInput({
                   ...input,
                   [key]: Math.max(0, Math.trunc(Number(event.target.value) || 0))
@@ -856,7 +939,7 @@ export default function App() {
                     [key]: Number(event.target.value)
                   }
                 })} /></label>)}</div><label>{t("Starting path CSV")}<input key={JSON.stringify(input.starting_path)} defaultValue={input.starting_path.join(",")} onBlur={event => applyStartingPathCsv(event.target.value)} /></label>{engines.length > 1 && <label>{t("Engine")}<select value={engineId} onChange={event => setEngineId(event.target.value)}>{engines.map(engine => <option key={engine.id} value={engine.id}>{engine.name}</option>)}</select></label>}</details>
-          <section className="section-card profiles-section"><div className="section-heading"><h3>{t("Profiles")}</h3>{profileId && <button className="button ghost" disabled={isSavingProfile} onClick={() => saveProfile(true)}>{t("Save a copy")}</button>}</div><label>{t("Name")}<input value={profileName} onChange={event => setProfileName(event.target.value)} /></label><div className="profiles">{profiles.map(profile => <article className="profile-card" key={profile.id}><div><strong>{profile.name}{profile.id === profileId ? t(" · selected") : ""}</strong></div><div className="profile-actions"><button className="button secondary" onClick={() => loadProfile(profile)}>{t("Load")}</button><button className="button danger subtle" onClick={() => deleteProfile(profile.id)}>{t("Delete")}</button></div></article>)}</div><Pagination page={profilePage} total={profileTotal} pageSize={PAGE_SIZE} onPageChange={setProfilePage} /></section>
+          <section className="section-card profiles-section"><div className="section-heading"><h3>{t("Profiles")}</h3>{profileId && <button className="button ghost" disabled={!instanceReady || isSavingProfile} onClick={() => saveProfile(true)}>{t("Save a copy")}</button>}</div><label>{t("Name")}<input value={profileName} onChange={event => setProfileName(event.target.value)} /></label><div className="profiles">{profiles.map(profile => <article className="profile-card" key={profile.id}><div><strong>{profile.name}{profile.id === profileId ? t(" · selected") : ""}</strong></div><div className="profile-actions"><button className="button secondary" onClick={() => loadProfile(profile)}>{t("Load")}</button><button className="button danger subtle" onClick={() => deleteProfile(profile.id)}>{t("Delete")}</button></div></article>)}</div><Pagination page={profilePage} total={profileTotal} pageSize={PAGE_SIZE} onPageChange={setProfilePage} /></section>
         </div></section>}
       </section>
       {ocrOpen && <OcrImportDialog onClose={closeOcr} onApply={applyOcrState} />}

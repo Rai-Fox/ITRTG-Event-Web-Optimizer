@@ -85,17 +85,42 @@ describe("Following a live search", () => {
     assert.equal(measured.secondsSinceImprovement, 0);
   });
 
-  test("shows finishing rather than completion when the time budget is used", () => {
-    const progress = searchProgress(savedRun({ status: "running" }), {
+  test("shows finishing at the budget while retaining a final evaluation that ran longer", () => {
+    const run = savedRun({ status: "running" });
+    run.limits.time_limit_seconds = 10;
+    run.result.search_stats.elapsed_seconds = 42;
+    run.result.search_stats.elapsed_seconds_offset = 30;
+
+    const progress = searchProgress(run, {
       receivedAtMs: 0,
       nowMs: 90000,
     });
 
     assert.equal(progress.status, "running");
     assert.equal(progress.finishing, true);
-    assert.equal(progress.elapsedSeconds, 30);
+    assert.equal(progress.elapsedSeconds, 10);
+    assert.equal(progress.totalElapsedSeconds, 42);
     assert.equal(progress.remainingSeconds, 0);
     assert.equal(progress.fraction, 1);
+  });
+
+  test("keeps cumulative variants and chart time while a continuation uses its own budget", () => {
+    const run = savedRun({ status: "running", parent_run_id: 6 });
+    Object.assign(run.result.search_stats, {
+      elapsed_seconds: 70,
+      elapsed_seconds_offset: 60,
+      iterations: 1250,
+      last_improvement_elapsed_seconds: 54,
+    });
+
+    const progress = searchProgress(structuredClone(run), { receivedAtMs: 1000, nowMs: 2500 });
+
+    assert.equal(progress.iterations, 1250);
+    assert.equal(progress.elapsedSeconds, 11.5);
+    assert.equal(progress.totalElapsedSeconds, 71.5);
+    assert.equal(progress.remainingSeconds, 18.5);
+    assert.equal(progress.fraction, 11.5 / 30);
+    assert.equal(progress.secondsSinceImprovement, 17.5);
   });
 });
 
@@ -140,6 +165,32 @@ describe("Keeping a finished result visible", () => {
     assert.equal(summary.secondsSinceImprovement, null);
     assert.equal(buildScoreChart(summary.history, 0), null);
   });
+
+  test("restores a continued result with total history and the latest search budget", () => {
+    const run = savedRun({ parent_run_id: 6 });
+    Object.assign(run.result.search_stats, {
+      elapsed_seconds: 90,
+      elapsed_seconds_offset: 60,
+      iterations: 1250,
+      last_improvement_elapsed_seconds: 84,
+      score_history: [
+        { elapsed_seconds: 0, score: 1 },
+        { elapsed_seconds: 54, score: 4 },
+        { elapsed_seconds: 84, score: 4.25 },
+      ],
+    });
+
+    const summary = completedSearchSummary(structuredClone(run));
+    const chart = buildScoreChart(summary.history, summary.elapsedSeconds);
+
+    assert.equal(summary.elapsedSeconds, 90);
+    assert.equal(summary.currentElapsedSeconds, 30);
+    assert.equal(summary.limitSeconds, 30);
+    assert.equal(summary.iterations, 1250);
+    assert.equal(summary.secondsSinceImprovement, 6);
+    assert.equal(chart.duration, 90);
+    assert.deepEqual(chart.points.map(point => point.score), [1, 4, 4.25, 4.25]);
+  });
 });
 
 describe("Displaying score changes", () => {
@@ -182,5 +233,30 @@ describe("Displaying score changes", () => {
     assert.equal(chart.duration, 10.05);
     assert.equal(chart.lastPoint.score, 2);
     assert.equal(chart.lastPoint.x, chart.width);
+  });
+
+  test("keeps earlier scores when a changed game state starts a lower scoring segment", () => {
+    const history = [
+      { elapsed_seconds: 0, score: 4 },
+      { elapsed_seconds: 6, score: 10 },
+      { elapsed_seconds: 10, score: 10 },
+      { elapsed_seconds: 10, score: 1, segment_start: true },
+      { elapsed_seconds: 10, score: 2 },
+      { elapsed_seconds: 12, score: 1.5 },
+      { elapsed_seconds: 13, score: 3 },
+    ];
+    const original = structuredClone(history);
+
+    const chart = buildScoreChart(history, 15);
+
+    assert.deepEqual(
+      chart.points.map(({ elapsed_seconds, score }) => [elapsed_seconds, score]),
+      [[0, 4], [6, 10], [10, 10], [10, 2], [13, 3], [15, 3]],
+    );
+    assert.equal(chart.path.match(/M /g).length, 2, "changed inputs are not joined to the old curve");
+    assert.ok(chart.minScore < 2);
+    assert.ok(chart.maxScore > 10);
+    assert.equal(chart.lastPoint.x, chart.width);
+    assert.deepEqual(history, original);
   });
 });

@@ -1,9 +1,29 @@
 """Saved plans survive updates, restarts and older history records."""
 
+import shutil
+
 import pytest
 
 from itrtg_web import main, storage
 from itrtg_web.models import RunLimits
+
+
+def test_database_identity_survives_restart_and_backup_but_separates_another_database(
+    client, tmp_path, monkeypatch
+):
+    instance_id = client.get("/api/instance").json()["id"]
+    main.startup()
+    assert client.get("/api/instance").json()["id"] == instance_id
+    backup = tmp_path / "backup.sqlite3"
+    shutil.copy2(storage.DB_PATH, backup)
+
+    monkeypatch.setattr(storage, "DB_PATH", tmp_path / "another.sqlite3")
+    main.startup()
+    assert client.get("/api/instance").json()["id"] != instance_id
+
+    monkeypatch.setattr(storage, "DB_PATH", backup)
+    main.startup()
+    assert client.get("/api/instance").json()["id"] == instance_id
 
 
 def test_restart_keeps_results_but_only_interrupts_unfinished_searches(

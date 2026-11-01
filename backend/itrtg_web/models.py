@@ -116,10 +116,12 @@ class TimelineSnapshot(BaseModel):
 class ScoreHistoryPoint(BaseModel):
     elapsed_seconds: float = Field(ge=0)
     score: float
+    segment_start: bool = False
 
 
 class SearchStats(BaseModel):
     elapsed_seconds: float = Field(ge=0)
+    elapsed_seconds_offset: float = Field(default=0, ge=0)
     iterations: int = Field(ge=0)
     stop_reason: Literal["time_limit", "iteration_limit", "user_stop"] | None = None
     score_history: list[ScoreHistoryPoint] = Field(default_factory=list)
@@ -160,6 +162,7 @@ class ProfilePage(BaseModel):
 
 class RunCreate(BaseModel):
     profile_id: int | None = None
+    parent_run_id: int | None = Field(default=None, ge=1)
     engine_id: str = "cpp-local-search"
     input: OptimizerInput
     limits: RunLimits = Field(default_factory=RunLimits)
@@ -173,6 +176,7 @@ class SimulateRequest(BaseModel):
 class RunRecord(BaseModel):
     id: int
     profile_id: int | None
+    parent_run_id: int | None = None
     engine_id: str
     engine_version: str
     status: Literal["queued", "running", "completed", "stopped", "failed", "interrupted"]

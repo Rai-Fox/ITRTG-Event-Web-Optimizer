@@ -203,6 +203,11 @@ function Initialize-Tesseract {
 try {
     Set-Location -LiteralPath $projectDirectory
     if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { throw 'This launcher requires 64-bit (x64) Windows.' }
+    # Check before downloading tools: Windows and Docker share the same UI address.
+    $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    foreach ($port in @(8000, 8080)) {
+        if ($listeners.Port -contains $port) { throw "Port $port is already in use. Stop the running optimizer (including Docker) and try again." }
+    }
     $node = Initialize-Node
     $env:PATH = (Split-Path -Parent $node.Node) + ';' + $env:PATH
     $uv = Initialize-Uv
@@ -225,16 +230,10 @@ try {
         Set-Content -LiteralPath $lockStamp -Value $lockHash -Encoding ASCII
     }
 
-    # Keep fixed ports: the interface connects to the API on port 8000.
-    $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
-    foreach ($port in @(8000, 5173)) {
-        if ($listeners.Port -contains $port) { throw "Port $port is already in use. Stop the running application and try again." }
-    }
-
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     Write-Host 'Starting the optimizer...'
     $services += Start-Process -FilePath $python -ArgumentList @('-m', 'uvicorn', 'itrtg_web.main:app', '--app-dir', 'backend', '--host', '127.0.0.1', '--port', '8000') -WorkingDirectory $projectDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory 'backend.log') -RedirectStandardError (Join-Path $logDirectory 'backend.err.log')
-    $services += Start-Process -FilePath $node.Node -ArgumentList @('node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173', '--strictPort') -WorkingDirectory $frontendDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory 'frontend.log') -RedirectStandardError (Join-Path $logDirectory 'frontend.err.log')
+    $services += Start-Process -FilePath $node.Node -ArgumentList @('node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '8080', '--strictPort') -WorkingDirectory $frontendDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory 'frontend.log') -RedirectStandardError (Join-Path $logDirectory 'frontend.err.log')
 
     $deadline = (Get-Date).AddSeconds(60)
     while ($true) {
@@ -242,13 +241,13 @@ try {
             $service.Refresh()
             if ($service.HasExited) { throw "A service stopped during startup. See the logs in $logDirectory" }
         }
-        if ((Test-Ready 'http://127.0.0.1:8000/api/engines') -and (Test-Ready 'http://127.0.0.1:5173')) { break }
+        if ((Test-Ready 'http://127.0.0.1:8000/api/engines') -and (Test-Ready 'http://127.0.0.1:8080')) { break }
         if ((Get-Date) -ge $deadline) { throw "Startup timed out. See the logs in $logDirectory" }
         Start-Sleep -Milliseconds 500
     }
 
-    Start-Process 'http://127.0.0.1:5173'
-    Write-Host 'Optimizer ready: http://127.0.0.1:5173'
+    Start-Process 'http://127.0.0.1:8080'
+    Write-Host 'Optimizer ready: http://127.0.0.1:8080'
     Read-Host 'Keep this window open. Press Enter to stop the optimizer' | Out-Null
 } catch {
     Write-Host $_.Exception.Message -ForegroundColor Red

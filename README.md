@@ -24,7 +24,7 @@ Screenshot recognition runs locally with **Tesseract** by default.
 2. Right-click the ZIP → **Extract All…**, then open the folder containing **start.cmd**.
 3. Double-click **start.cmd**. It prepares the tools and opens the app automatically.
 
-The Windows address is **http://127.0.0.1:5173**. Keep the launcher window open; press **Enter** in it to save and stop the app.
+Both launch methods use **http://127.0.0.1:8080**; run only one at a time. With **start.cmd**, keep the launcher window open and press **Enter** in it to save and stop the app.
 
 <details>
 <summary>Click for Windows installation and startup</summary>
@@ -74,10 +74,10 @@ Git creates the `ITRTG-Event-Web-Optimizer` folder; no ZIP extraction is needed 
 4. Wait until the window shows:
 
    ```text
-   Optimizer ready: http://127.0.0.1:5173
+   Optimizer ready: http://127.0.0.1:8080
    ```
 
-5. The app should open in your browser. If it does not, enter **http://127.0.0.1:5173** in the browser's address bar.
+5. The app should open in your browser. If it does not, enter **http://127.0.0.1:8080** in the browser's address bar.
 
 Keep the launcher window open while using the app. The browser tab is the interface; the launcher keeps the app running on your computer.
 
@@ -93,7 +93,7 @@ Open only one copy of the launcher at a time.
 2. When it shows **Press Enter to stop the optimizer**, press **Enter**.
 3. Wait for the window to finish and close. Active searches save their best plan before the app stops.
 
-Closing the browser tab alone leaves the app running. To reopen the interface while the launcher is running, visit **http://127.0.0.1:5173** again.
+Closing the browser tab alone leaves the app running. To reopen the interface while the launcher is running, visit **http://127.0.0.1:8080** again.
 
 Use Enter to stop the app, so it can save the best plan before closing. Closing the launcher window with its × button may interrupt that save.
 
@@ -127,7 +127,7 @@ To stop the app, run this command from the same folder:
 docker compose down
 ```
 
-The ordinary `down` command preserves saved profiles and history. They are kept in Docker's **optimizer-data** volume, separately from the Windows launcher's `data` folder. Docker Desktop usually shows its full name ending in `_optimizer-data`. Keep that volume when managing Docker data; do not add `-v` to the stop command. Browser drafts and preferences at port **8080** are also separate from the Windows address at port **5173**.
+The ordinary `down` command preserves saved profiles and history. They are kept in Docker's **optimizer-data** volume, separately from the Windows launcher's `data` folder. Docker Desktop usually shows its full name ending in `_optimizer-data`. Keep that volume when managing Docker data; do not add `-v` to the stop command.
 
 To update a Docker installation, stop it with the command above and extract the new download elsewhere. Open the new folder containing `compose.yaml`, select **its contents**, and copy them **into the old folder containing `compose.yaml`, keeping the old folder's name**. Allow files to be replaced. Copy the contents rather than nesting the whole new folder inside the old one. Run `docker compose up --build -d` from the old folder again. Starting from a newly named download folder creates a separate Docker volume and shows empty profiles and history, even though the previous data still exists.
 
@@ -176,12 +176,12 @@ Check the [current event assumptions](#current-event-and-assumptions) before rel
 | --- | --- | --- |
 | Current working values, search time, selected result and forecast position | Your browser | Open the same address in the same browser profile |
 | Language and OCR engine choice | Your browser, separately from game values | Restored when you reopen the app |
-| Named profiles and search history | The optimizer's `data` folder | Start the app from the folder containing that data |
+| Named profiles and search history | Windows: `data` folder; Docker: `optimizer-data` volume | Restored within the chosen launch method |
 | Imported screenshots | Temporary files | Removed after recognition; your original screenshot is unchanged |
 
-Use **http://127.0.0.1:5173** consistently for the Windows launcher. The browser treats `localhost`, another port, another browser, or a private window as separate storage. Deleting browser data can remove the working draft and language choice; named profiles and history remain in the app's `data` folder.
+Use **http://127.0.0.1:8080** for both launch methods. In the same browser profile, this address shares the working draft, language and saved OCR choice between Windows and Docker. Profiles and history stay in separate databases. Switching databases clears profile/result selections, forecast and undo state while keeping game values and search settings. The browser treats `localhost`, another port, another browser or a private window as separate storage. Drafts from a previous address are not migrated automatically. Clearing browser data can remove the draft and preferences; the databases are kept.
 
-To back up profiles and history, stop the app with Enter, then copy the entire **data** folder somewhere safe. Its database file is `data/itrtg.sqlite3`. The folder is created when the app first runs.
+For a Windows backup, stop the app with Enter, then copy the entire **data** folder somewhere safe. Its database file is `data/itrtg.sqlite3`. The folder is created when the app first runs.
 
 ### Update using a new download
 
@@ -190,7 +190,7 @@ To back up profiles and history, stop the app with Enter, then copy the entire *
 3. Download and extract the new version into a new folder, following the download steps in the [Windows installation instructions](#installation-and-startup).
 4. Before starting the new version, copy the old **data** folder into the new folder beside **start.cmd**.
 5. Double-click the new **start.cmd** and wait for it to prepare any updated dependencies.
-6. Open **http://127.0.0.1:5173** in the same browser profile. Check that your profiles and history are present before removing the old copy.
+6. Open **http://127.0.0.1:8080** in the same browser profile. Check that your profiles and history are present before removing the old copy.
 
 The browser's working draft follows the browser and address, so changing the optimizer's folder does not by itself reset that draft. Old saved plans are not automatically recalculated after simulation changes.
 
@@ -201,6 +201,8 @@ Editing game values keeps the previous result and marks it as using different in
 **Improve remaining plan** removes consecutive leading purchases whose target Level or Speed is already reached. It keeps the rest in order and evaluates that remaining path against your new resources and time before improving it. It requires the same engine version, levels that have not decreased, and event time that has not increased. The old score is not reused. OCR clears an old starting-path CSV; an explicitly entered CSV otherwise takes precedence for changed inputs. Busy periods retain the values currently entered in Settings.
 
 The best path and search statistics are saved at most once per second and on normal completion or stop. After an unexpected shutdown, unfinished searches are marked **Interrupted**. A saved checkpoint can be used to continue; the last unsaved improvement may be lost. Continuation starts from the best saved path rather than restoring an exact internal random-generator state.
+
+Continuation keeps cumulative search time, checked variants and score history; the progress bar applies only to the new search's time budget. Changed game values start a new graph segment at the recalculated score (which may be lower) and restart the last-improvement timer.
 
 **History** shows each run's creation time, status, forecast period and optimization points, including zero. Opening a historical result does not change the global Ready/Running connection status. Older runs without graph data still show their saved points. Graph data and the last-improvement timestamp are saved with newer results. Points are displayed with up to three decimal places; calculations retain full precision.
 
@@ -223,11 +225,11 @@ Find the message closest to the one shown in your launcher window or browser.
 | `Download verification failed` | Run **start.cmd** again to retry the download. If it repeats, include the exact message and filename when reporting the problem. |
 | `Could not prepare local Node.js and npm` or `Could not prepare local uv` | Read the lines above the error, check that the app folder can be written to, and run **start.cmd** again. |
 | Files cannot be created or access to the app folder is denied | Extract the app into a folder you can write to, such as a folder in **Documents**, then run **start.cmd** there. |
-| `Port 8000 is already in use` or `Port 5173 is already in use` | Find the previous optimizer launcher and press Enter to stop it. Then start one copy. If you cannot find the old window, restart Windows and try again. |
+| `Port 8000 is already in use` or `Port 8080 is already in use` | Stop the previous launcher with Enter, or stop Docker with `docker compose down` from its project folder. Then start one launch method. If you cannot find the old launcher window, restart Windows and try again. |
 | `Could not install Python dependencies` or `Could not install frontend dependencies` | Check your internet connection, read the lines immediately above the error, and run start.cmd again. |
 | Tesseract preparation failed | Check the internet connection and the launcher message, then run **start.cmd** again. If it still fails, include the visible error when reporting the problem. |
 | `A service stopped during startup` or `Startup timed out` | Open the log files described below. |
-| The browser cannot open the page | Wait for `Optimizer ready` in the launcher, then open **http://127.0.0.1:5173**. Keep the launcher running. |
+| The browser cannot open the page | Wait for `Optimizer ready` in the launcher, then open **http://127.0.0.1:8080**. Keep the launcher running. |
 | `Cannot reach the backend` | Check that the launcher is still running. If it exited, read its message or logs and restart it. The browser reconnects automatically. |
 | Screenshot values are blank or wrong | Include the full grid with all resource headings and use a clear screenshot. Correct values before applying. You can try the other OCR engine on Windows or enter the values manually. |
 | Event time was not found | Include the labelled timer in the screenshot, or enter the correct remaining time in Planner. The previously entered period is kept when recognition fails. |
@@ -292,14 +294,14 @@ In another terminal, starting from the same project folder:
 ```sh
 cd frontend
 npm ci
-npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+npm run dev -- --host 127.0.0.1 --port 8080 --strictPort
 ```
 
-Open `http://127.0.0.1:5173`. On Linux, install the `tesseract` command and English language data for screenshot import (Debian/Ubuntu packages: `tesseract-ocr` and `tesseract-ocr-eng`); Docker already includes them. The app is intended for local use and has no authentication for public hosting.
+Open `http://127.0.0.1:8080`. On Linux, install the `tesseract` command and English language data for screenshot import (Debian/Ubuntu packages: `tesseract-ocr` and `tesseract-ocr-eng`); Docker already includes them. The app is intended for local use and has no authentication for public hosting.
 
 For a custom Tesseract installation, set `ITRTG_TESSERACT_PATH` to the full executable path before launching the app. Otherwise the backend checks `PATH` and standard Windows installation folders. The Windows launcher checks that English data is available and passes the chosen path to the backend. Tesseract runs for each import, rather than as a separate service. The optional Windows OCR package uses Python 3.12 wheels.
 
-The UI starts searches with a time limit. Iteration caps from older drafts, profiles and saved runs are not reapplied; explicit API iteration caps remain supported. The last-improvement timer starts with the initial plan, is recorded by the search independently of UI polling, and resets only for a strictly better score.
+The UI starts searches with a time limit. Iteration caps from older drafts, profiles and saved runs are not reapplied; explicit API iteration caps remain supported. Within each segment, the last-improvement timer starts with its initial plan, is recorded by the search independently of UI polling, and resets only for a strictly better score.
 
 ### Checks
 

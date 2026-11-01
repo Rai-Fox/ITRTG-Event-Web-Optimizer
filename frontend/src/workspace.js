@@ -19,6 +19,21 @@ export function writeWorkspace(storage, workspace) {
   storage.setItem(WORKSPACE_KEY, JSON.stringify({ ...workspace, version: 1 }));
 }
 
+export function reconcileWorkspace(workspace, instanceId) {
+  if (instanceId && workspace.instanceId === instanceId) return workspace;
+  const boundSource = ["profile", "run", "forecast"].includes(workspace.sourceInfo?.kind);
+  return {
+    ...workspace,
+    instanceId,
+    profileId: null,
+    selectedRunId: null,
+    preview: false,
+    timelineSeconds: 0,
+    sourceInfo: boundSource ? { kind: "manual" } : workspace.sourceInfo,
+    undo: null,
+  };
+}
+
 export function inputAtTimeline(input, timeline) {
   const elapsedHours = timeline.elapsed_seconds / 3600;
   return {

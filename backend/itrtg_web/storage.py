@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from itrtg_web.models import OptimizerInput, OptimizerResult, Profile, ProfileIn, RunLimits, RunRecord
 
@@ -22,6 +23,11 @@ def init_db() -> None:
     with connect() as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -35,6 +41,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id INTEGER,
+                parent_run_id INTEGER,
                 engine_id TEXT NOT NULL,
                 engine_version TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -48,9 +55,12 @@ def init_db() -> None:
             );
             """
         )
+        conn.execute("INSERT OR IGNORE INTO metadata (key, value) VALUES ('instance_id', ?)", (str(uuid4()),))
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
         if "limits_json" not in columns:
             conn.execute("ALTER TABLE runs ADD COLUMN limits_json TEXT")
+        if "parent_run_id" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN parent_run_id INTEGER")
         profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()}
         if "limits_json" not in profile_columns:
             conn.execute("ALTER TABLE profiles ADD COLUMN limits_json TEXT")
@@ -59,6 +69,11 @@ def init_db() -> None:
 def recover_interrupted_runs() -> None:
     with connect() as conn:
         conn.execute("UPDATE runs SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP WHERE status IN ('queued', 'running')")
+
+
+def get_instance_id() -> str:
+    with connect() as conn:
+        return conn.execute("SELECT value FROM metadata WHERE key = 'instance_id'").fetchone()["value"]
 
 
 def active_runs() -> list[RunRecord]:
@@ -125,14 +140,14 @@ def delete_profile(profile_id: int) -> None:
             raise KeyError(f"Profile {profile_id} not found")
 
 
-def create_run(profile_id: int | None, engine_id: str, engine_version: str, input_data: OptimizerInput, limits: RunLimits) -> RunRecord:
+def create_run(profile_id: int | None, engine_id: str, engine_version: str, input_data: OptimizerInput, limits: RunLimits, parent_run_id: int | None = None) -> RunRecord:
     with connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO runs (profile_id, engine_id, engine_version, status, input_json, limits_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO runs (profile_id, parent_run_id, engine_id, engine_version, status, input_json, limits_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (profile_id, engine_id, engine_version, "queued", _dumps(input_data), _dumps(limits)),
+            (profile_id, parent_run_id, engine_id, engine_version, "queued", _dumps(input_data), _dumps(limits)),
         )
         run_id = int(cur.lastrowid)
     return get_run(run_id)
@@ -188,6 +203,7 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
     return RunRecord(
         id=row["id"],
         profile_id=row["profile_id"],
+        parent_run_id=row["parent_run_id"],
         engine_id=row["engine_id"],
         engine_version=row["engine_version"],
         status=row["status"],
