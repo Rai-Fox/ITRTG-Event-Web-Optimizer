@@ -1,0 +1,11 @@
+services:
+  optimizer:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8000"
+    volumes:
+      - optimizer-data:/app/data
+    stop_grace_period: 20s
+
+volumes:
+  optimizer-data:
