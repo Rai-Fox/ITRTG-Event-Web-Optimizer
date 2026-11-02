@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildRunRequest, getContinuationSeed, settingsMatch } from "./runContinuation.js";
-import { ACTIVE_STATUSES, DEFAULT_LIMITS, readWorkspace, writeWorkspace, reconcileWorkspace, inputAtTimeline } from "./workspace.js";
+import { ACTIVE_STATUSES, DEFAULT_LIMITS, readWorkspace, writeWorkspace, reconcileWorkspace, inputAtTimeline, readChecklist, writeChecklist } from "./workspace.js";
 import { useI18n } from "./I18nProvider.jsx";
 import { translate, localeFor } from "./i18n.js";
 import { durationParts, durationFromParts, formatScore, optimizerStatus } from "./runPresentation.js";
@@ -58,6 +58,28 @@ function DurationInputs({ value, onChange, label }) {
 }
 function UpgradeBatch({ batch }) {
   return <div className="upgrade-targets">{batch.upgrades.map((upgrade) => <div className="upgrade-target" key={upgrade.resourceIndex}><strong>{resourceLabels[upgrade.resourceIndex]}</strong><span>Level {upgrade.fromLevel !== upgrade.level && <>{upgrade.fromLevel} → </>}<b>{upgrade.level}</b></span><span>Speed {upgrade.fromSpeed !== upgrade.speed && <>{upgrade.fromSpeed} → </>}<b>{upgrade.speed}</b></span></div>)}</div>;
+}
+function FullPlan({ instanceId, run, groups, purchases }) {
+  const { t, language } = useI18n();
+  const [checked, setChecked] = useState(() => readChecklist(window.localStorage, instanceId, run.id));
+  const [saveFailed, setSaveFailed] = useState(false);
+  const editable = !ACTIVE_STATUSES.has(run.status);
+  const completed = purchases.filter(purchase => checked.includes(purchase.index)).length;
+  function toggle(index) {
+    const next = checked.includes(index) ? checked.filter(item => item !== index) : [...checked, index];
+    setChecked(next);
+    try {
+      writeChecklist(window.localStorage, instanceId, run.id, next);
+      setSaveFailed(false);
+    } catch {
+      setSaveFailed(true);
+    }
+  }
+  return <details className="technical-details"><summary>{t("Full plan ·")} {purchases.length} {t("purchases")} · {t("{0} done", [completed])}</summary>
+    <p>{editable ? t("Checks are saved in this browser for this plan.") : t("Checks are available when the search finishes.")}</p>
+    {saveFailed && <p role="alert">{t("Could not save checkmarks in this browser.")}</p>}
+    {groups.map(group => <details className="purchase-day" key={group.day}><summary>{t("Day")} {group.day + 1} · {t("{0} of {1} done", [group.purchases.filter(purchase => checked.includes(purchase.index)).length, group.purchases.length])}</summary>{group.purchases.map(purchase => <label className={`purchase-row${checked.includes(purchase.index) ? " purchase-done" : ""}`} key={purchase.index}><input type="checkbox" disabled={!editable} checked={checked.includes(purchase.index)} onChange={() => toggle(purchase.index)} /><span>{formatTime(purchase.elapsed_seconds, language)}</span><strong>{purchase.upgrade_name}</strong><small>{t("level")} {purchase.level_after}</small></label>)}</details>)}
+  </details>;
 }
 function ScoreHistoryChart({ history, elapsedSeconds }) {
   const { t, language } = useI18n();
@@ -891,7 +913,7 @@ export default function App() {
           {run?.status === "interrupted" && !continuationAvailable && <div className="readiness-warning">{t("The search was interrupted.")} {run.result ? t("Load its settings to continue from the saved best path.") : t("No path was saved yet. Load its settings and start a new search.")}</div>}
           {bestResult && <section className="section-card path-panel"><div className="section-heading"><h3>{!stale && !preview && ["manual", "ocr"].includes(sourceInfo.kind) ? t("Available now") : t("At the start of this plan")}</h3></div>{upgradePlan.now ? <UpgradeBatch batch={upgradePlan.now} /> : <p className="empty-state compact">{t("No upgrades at the start of this plan.")}</p>}
             {upgradePlan.next.length > 0 && <><h3>{t("Next steps")}</h3><ol className="next-upgrades">{upgradePlan.next.map((batch) => <li key={batch.elapsed_seconds}><strong className="upgrade-time">{t("After {0} from plan start", [formatTime(batch.elapsed_seconds, language)])}</strong><UpgradeBatch batch={batch} /></li>)}</ol></>}
-            <details className="technical-details"><summary>{t("Full plan ·")} {bestPurchases.length} {t("purchases")}</summary>{purchaseGroups.map(group => <details className="purchase-day" key={group.day}><summary>{t("Day")} {group.day + 1} · {group.purchases.length} {t("purchases")}</summary>{group.purchases.map(purchase => <div className="purchase-row" key={purchase.index}><span>{formatTime(purchase.elapsed_seconds, language)}</span><strong>{purchase.upgrade_name}</strong><small>{t("level")} {purchase.level_after}</small></div>)}</details>)}</details>
+            {instanceReady && <FullPlan key={`${instanceId}:${run.id}`} instanceId={instanceId} run={run} groups={purchaseGroups} purchases={bestPurchases} />}
           </section>}
           <section className="section-card state-section">
             <div className="section-heading"><h3>{preview ? t("Forecast #{0} at {1}", [run?.id || "…", formatTime(timelineSeconds, language)]) : t("Game state")}</h3>{!preview && sourceLabel && <small className="source-label" title={sourceInfo.at ? new Date(sourceInfo.at).toLocaleString(localeFor(language)) : undefined}>{sourceLabel}</small>}<div className="actions"><button className={`button ${!preview ? "secondary" : "ghost"}`} onClick={() => setPreview(false)}>{t("Edit")}</button><button className={`button ${preview ? "secondary" : "ghost"}`} disabled={!run?.result} onClick={() => setPreview(true)}>{t("Forecast")}</button></div></div>

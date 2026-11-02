@@ -18,6 +18,8 @@ The generator-event model and optimization approach are based on [fkusz/ITRTG-Ge
 
 Screenshot recognition runs locally with **Tesseract** by default.
 
+In a finished plan, expand **Full plan** and a day to check off purchases. Checkmarks stay in this browser for that saved run; a new run has its own checklist.
+
 ![Optimizer interface with score history and recommended upgrades](docs/images/optimizer.png)
 
 ## Installation and startup

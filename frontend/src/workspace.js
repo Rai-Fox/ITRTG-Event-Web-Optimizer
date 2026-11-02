@@ -4,6 +4,23 @@ export const WORKSPACE_KEY = "itrtg:halloween2026:workspace:v1";
 export const DEFAULT_LIMITS = { time_limit_seconds: 30, max_iterations: null, seed: null };
 export const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
+function checklistKey(instanceId, runId) {
+  return `itrtg:checklist:${instanceId}:${runId}`;
+}
+
+export function readChecklist(storage, instanceId, runId) {
+  try {
+    const value = JSON.parse(storage.getItem(checklistKey(instanceId, runId)));
+    return Array.isArray(value) ? value.filter(Number.isInteger) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeChecklist(storage, instanceId, runId, checked) {
+  storage.setItem(checklistKey(instanceId, runId), JSON.stringify(checked));
+}
+
 export function readWorkspace(storage, defaultInput) {
   const fallback = { input: structuredClone(defaultInput), limits: { ...DEFAULT_LIMITS }, recordedAt: Date.now() };
   try {

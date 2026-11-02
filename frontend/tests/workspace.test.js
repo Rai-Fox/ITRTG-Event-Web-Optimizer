@@ -3,13 +3,29 @@ import { describe, test } from "node:test";
 
 import {
   inputAtTimeline,
+  readChecklist,
   readWorkspace,
   reconcileWorkspace,
   writeWorkspace,
+  writeChecklist,
 } from "../src/workspace.js";
 import { gameInput, memoryStorage, upgrade } from "./fixtures.js";
 
 describe("Keeping the working state", () => {
+  test("keeps checked purchases for each saved plan and database independently", () => {
+    const storage = memoryStorage();
+    writeChecklist(storage, "windows", 18, [0, 3]);
+    writeChecklist(storage, "windows", 19, [1]);
+    writeChecklist(storage, "docker", 18, [2]);
+
+    assert.deepEqual(readChecklist(storage, "windows", 18), [0, 3]);
+    assert.deepEqual(readChecklist(storage, "windows", 19), [1]);
+    assert.deepEqual(readChecklist(storage, "docker", 18), [2]);
+    writeChecklist(storage, "windows", 18, [3]);
+    assert.deepEqual(readChecklist(storage, "windows", 18), [3]);
+    assert.deepEqual(readChecklist(storage, "windows", 20), []);
+  });
+
   test("restores the draft and forecast in the same database without an old iteration cap", () => {
     const storage = memoryStorage();
     const workspace = {
